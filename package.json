@@ -1,0 +1,24 @@
+{
+  "name": "taskmesh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Discord-centered multi-agent orchestration for Claude Code, Codex, and Gemini.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "dev": "node --watch --enable-source-maps dist/index.js",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2"
+  }
+}
