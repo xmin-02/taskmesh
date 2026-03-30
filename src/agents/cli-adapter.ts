@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { basename } from "node:path";
 
 import type { AgentCliConfig, AgentKind, DockerProviderConfig, ExecutionMode } from "../config.js";
 import type { AgentAdapter, AgentTooling } from "./adapter.js";
@@ -241,7 +242,10 @@ export class CliAgentAdapter implements AgentAdapter {
     const invocation = buildInvocation(this.kind, this.config, session);
     const finalInvocation =
       this.executionMode === "docker"
-        ? { ...invocation, args: rewritePathsForDocker(invocation.args, this.hostProjectDir) }
+        ? {
+            command: basename(invocation.command),
+            args: rewritePathsForDocker(invocation.args, this.hostProjectDir)
+          }
         : invocation;
 
     return new Promise<AgentRunResult>((resolve, reject) => {

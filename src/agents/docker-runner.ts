@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { homedir } from "node:os";
 
 import type { AgentCliConfig, AgentKind, DockerProviderConfig } from "../config.js";
@@ -28,6 +30,11 @@ export function spawnDockerAgent(config: DockerRunConfig) {
     "-v",
     `${config.session.artifactsDir}:/artifacts`
   ];
+
+  const agentHomeDir = join(config.session.sessionDir, `.${config.agent}-home`);
+  mkdirSync(agentHomeDir, { recursive: true });
+  args.push("-v", `${agentHomeDir}:/home/taskmesh`);
+  args.push("-e", "HOME=/home/taskmesh");
 
   args.push("--memory=4g", "--cpus=2");
 
