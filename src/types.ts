@@ -46,6 +46,7 @@ export interface ResolvedArtifact {
 export interface AgentRunResult {
   summary: string;
   rawOutput?: string;
+  externalSessionId?: string;
   artifacts?: ResolvedArtifact[];
   fileWrites?: FileArtifactInstruction[];
   delegations?: DelegationInstruction[];

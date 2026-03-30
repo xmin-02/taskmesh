@@ -79,6 +79,12 @@ export class SqliteTaskStore implements TaskStore {
     return { id, agent, scope };
   }
 
+  async updateSessionExternalId(sessionId: string, externalSessionId: string): Promise<void> {
+    this.database
+      .prepare(`UPDATE agent_sessions SET external_session_id = ? WHERE id = ?`)
+      .run(externalSessionId, sessionId);
+  }
+
   async createTask(task: CreateTaskInput): Promise<TaskRecord> {
     const id = randomUUID();
     const scoped = scopeKey(task.scope);

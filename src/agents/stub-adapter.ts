@@ -1,11 +1,12 @@
 import type { AgentAdapter, AgentTooling } from "./adapter.js";
+import type { SessionPaths } from "../sessions/workspace-manager.js";
 import type { AgentRunResult, AgentSession, TaskRecord } from "../types.js";
 import type { AgentKind } from "../config.js";
 
 export class StubAgentAdapter implements AgentAdapter {
   constructor(public readonly kind: AgentKind) {}
 
-  async run(task: TaskRecord, session: AgentSession, _tools: AgentTooling): Promise<AgentRunResult> {
+  async run(task: TaskRecord, session: AgentSession, _sessionPaths: SessionPaths, _tools: AgentTooling): Promise<AgentRunResult> {
     const fileMatch = task.prompt.match(/\[file:([^\]]+)\]([\s\S]*)$/i);
     if (fileMatch?.[1] && fileMatch[2]) {
       return {

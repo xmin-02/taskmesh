@@ -1,13 +1,16 @@
 import {
   Events,
   GatewayIntentBits,
+  MessageFlags,
   Partials,
+  SlashCommandBuilder,
   type Client,
   type Message
 } from "discord.js";
 
 import type { AppConfig } from "../config.js";
 import type { Orchestrator } from "../orchestrator/orchestrator.js";
+import type { SettingsWebApp } from "../settings/server.js";
 import type { ChannelMode } from "./channel-policy.js";
 import { resolveChannelPolicy } from "./channel-policy.js";
 import { DiscordPublisher } from "./publisher.js";
@@ -53,19 +56,136 @@ function buildAgentPrompt(originalPrompt: string): string {
   ].join("\n");
 }
 
+function formatSettingsLinksMessage(
+  links: { localUrl: string; externalUrl?: string; externalError?: string } | undefined
+): string {
+  if (!links) {
+    return "설정 웹 앱이 아직 준비되지 않았습니다.";
+  }
+
+  if (links.externalUrl) {
+    return [
+      "설정 웹 앱 링크를 발급했습니다.",
+      `External: ${links.externalUrl}`,
+      "이 링크는 1회 접근용이며 짧은 시간 후 만료됩니다."
+    ].join("\n");
+  }
+
+  return [
+    "설정 웹 앱 링크를 발급했습니다.",
+    `Local: ${links.localUrl}`,
+    ...(!links.externalUrl && links.externalError ? [`External unavailable: ${links.externalError}`] : []),
+    "이 링크는 1회 접근용이며 짧은 시간 후 만료됩니다."
+  ].join("\n");
+}
+
 export function attachDiscordHandlers(
   client: Client,
   config: AppConfig,
   orchestrator: Orchestrator,
-  publisher: DiscordPublisher
+  publisher: DiscordPublisher,
+  settingsApp?: SettingsWebApp
 ): void {
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Taskmesh connected as ${readyClient.user.tag}`);
   });
 
+  client.once(Events.ClientReady, async (readyClient) => {
+    try {
+      const commands = [
+        new SlashCommandBuilder()
+          .setName("setting")
+          .setDescription("Issue a one-time Taskmesh settings web app link"),
+        new SlashCommandBuilder()
+          .setName("settings")
+          .setDescription("Issue a one-time Taskmesh settings web app link")
+      ].map((command) => command.toJSON());
+
+      if (config.discordGuildId) {
+        const guild = await readyClient.guilds.fetch(config.discordGuildId);
+        await guild.commands.set(commands);
+      } else if (readyClient.application) {
+        await readyClient.application.commands.set(commands);
+      }
+    } catch (error) {
+      console.warn("Failed to register slash commands:", error);
+    }
+  });
+
+  client.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isChatInputCommand()) {
+      return;
+    }
+
+    if (interaction.commandName !== "setting" && interaction.commandName !== "settings") {
+      return;
+    }
+
+    const channel = interaction.channel;
+    if (!channel || !channel.isTextBased() || !("name" in channel) || channel.name !== config.settingChannelName) {
+      await interaction.reply({
+        content: `이 명령은 #${config.settingChannelName} 채널에서만 사용할 수 있습니다.`,
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const local = settingsApp?.issueLocalLink();
+    if (settingsApp && local && config.settingsEnableTunnel) {
+      const external = await settingsApp.issueExternalLink(local.token);
+      await interaction.editReply({
+        content: formatSettingsLinksMessage({
+          localUrl: local.localUrl,
+          ...external
+        }),
+      });
+      return;
+    }
+
+    await interaction.editReply({
+      content: formatSettingsLinksMessage(
+        local
+          ? { localUrl: local.localUrl }
+          : undefined
+      ),
+    });
+  });
+
   client.on(Events.MessageCreate, async (message) => {
     if (isIgnorableMessage(message)) {
       return;
+    }
+
+    if (message.channel.isTextBased() && "name" in message.channel && message.channel.name === config.settingChannelName) {
+      if (message.content.trim().startsWith("/setting")) {
+        const local = settingsApp?.issueLocalLink();
+        if (settingsApp && local && config.settingsEnableTunnel) {
+          const external = await settingsApp.issueExternalLink(local.token);
+          await publisher.publishAs(
+            "orchestrator",
+            message.channelId,
+            undefined,
+            formatSettingsLinksMessage({
+              localUrl: local.localUrl,
+              ...external
+            })
+          );
+          return;
+        }
+
+        await publisher.publishAs(
+          "orchestrator",
+          message.channelId,
+          undefined,
+          formatSettingsLinksMessage(
+            local
+              ? { localUrl: local.localUrl }
+              : undefined
+          )
+        );
+        return;
+      }
     }
 
     const policy = resolveChannelPolicy(message.channel, buildPolicyConfig(config), config.defaultAgent);
@@ -157,12 +277,13 @@ export function attachDiscordHandlers(
 
 export async function startDiscordRuntime(
   config: AppConfig,
-  orchestratorFactory: (publishMode: (scopeChannelId: string) => ChannelMode) => Orchestrator
+  orchestratorFactory: (publishMode: (scopeChannelId: string) => ChannelMode) => Orchestrator,
+  settingsApp?: SettingsWebApp
 ): Promise<DiscordPublisher> {
   const publisher = new DiscordPublisher(config);
   const modeByChannel = new Map<string, ChannelMode>();
   const orchestrator = orchestratorFactory((scopeChannelId) => modeByChannel.get(scopeChannelId) ?? "default");
-  attachDiscordHandlers(publisher.receiverClient, config, orchestrator, publisher);
+  attachDiscordHandlers(publisher.receiverClient, config, orchestrator, publisher, settingsApp);
   publisher.receiverClient.on(Events.MessageCreate, (message) => {
     const policy = resolveChannelPolicy(message.channel, buildPolicyConfig(config), config.defaultAgent);
     modeByChannel.set(message.channelId, policy.mode);

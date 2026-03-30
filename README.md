@@ -63,6 +63,29 @@ Taskmesh uses four Discord bot identities:
 
 The orchestrator bot is the only message receiver. The other three bots are sender identities used to post agent-specific updates into channels.
 
+## Session Runtime
+
+Each Discord orchestra channel maps to a session workspace under `runtime/sessions/<channel_id>/`.
+
+- `workspace/`: agent working directory
+- `artifacts/`: files produced for upload and retention
+- `meta.json`: reserved for future session metadata
+
+Taskmesh can execute agent CLIs in two modes:
+
+- `host`: run the local CLI directly with `cwd` set to the session workspace
+- `docker`: run the provider CLI inside a per-task container with the session workspace mounted into `/workspace`
+
+## Settings Channel
+
+Create a Discord channel named `setting` and send `/setting`.
+
+Taskmesh will:
+
+- issue a one-time local settings URL
+- optionally issue a one-time public URL through `cloudflared`
+- open a lightweight web app where a small allowlist of runtime settings can be changed
+
 ## Configuration
 
 Copy `.env.example` to `.env` and set:

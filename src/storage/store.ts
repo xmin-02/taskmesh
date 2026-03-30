@@ -3,6 +3,7 @@ import type { AgentSession, ChannelScope, CreateTaskInput, TaskRecord } from "..
 
 export interface TaskStore {
   getOrCreateSession(agent: AgentKind, scope: ChannelScope): Promise<AgentSession>;
+  updateSessionExternalId(sessionId: string, externalSessionId: string): Promise<void>;
   createTask(task: CreateTaskInput): Promise<TaskRecord>;
   updateTaskStatus(taskId: string, status: TaskRecord["status"]): Promise<void>;
   appendEvent(taskId: string, message: string): Promise<void>;

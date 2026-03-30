@@ -10,6 +10,17 @@ Taskmesh is intended to run on a single MacBook in the background.
 - `claude`, `codex`, `gemini`: local CLIs invoked by Taskmesh adapters
 - `sqlite`: embedded local database file, no external daemon required
 
+## Future isolation option
+
+The preferred stronger isolation model is:
+
+- keep the Discord orchestrator on the host
+- run agent workloads inside per-session containers
+- mount only per-session workspaces as read-write
+- reuse provider login either by read-only auth mounts or env injection
+
+See `docs/container-auth-review.md` for the provider-by-provider assessment.
+
 ## Discord identities
 
 Taskmesh expects four bot tokens:

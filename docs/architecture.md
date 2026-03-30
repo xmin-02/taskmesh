@@ -59,6 +59,14 @@ Discord
 - `launchd` is the preferred process supervisor
 - a later step can split the bot and workers into separate local services if needed
 
+### Planned containerized variant
+
+- Orchestrator remains on the host
+- each session can map to a dedicated container
+- agent CLIs run inside the session container
+- session workspace and artifacts are the only writable mounts
+- auth reuse is provider-specific and documented separately
+
 ## Session model
 
 ### Channel scope

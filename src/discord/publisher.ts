@@ -1,6 +1,8 @@
 import {
   Client,
   ChannelType,
+  Events,
+  type ApplicationCommand,
   type GuildBasedChannel,
   GatewayIntentBits,
   Partials
@@ -38,7 +40,10 @@ async function sendToScope(client: Client, channelId: string, threadId: string |
     throw new Error(`Channel ${targetId} is not text-capable`);
   }
 
-  await channel.send(content);
+  const chunks = splitDiscordMessage(content);
+  for (const chunk of chunks) {
+    await channel.send(chunk);
+  }
 }
 
 async function sendFilesToScope(
@@ -55,10 +60,15 @@ async function sendFilesToScope(
     throw new Error(`Channel ${targetId} is not text-capable`);
   }
 
+  const [firstChunk, ...restChunks] = splitDiscordMessage(content);
   await channel.send({
-    content,
+    content: firstChunk ?? "",
     files: filePaths
   });
+
+  for (const chunk of restChunks) {
+    await channel.send(chunk);
+  }
 }
 
 async function sendTypingToScope(client: Client, channelId: string, threadId: string | undefined): Promise<void> {
@@ -76,12 +86,59 @@ function normalizeName(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
 
+function splitDiscordMessage(content: string, maxLength = 1800): string[] {
+  if (content.length <= maxLength) {
+    return [content];
+  }
+
+  const chunks: string[] = [];
+  let remaining = content;
+
+  while (remaining.length > maxLength) {
+    const slice = remaining.slice(0, maxLength);
+    const breakpoint = Math.max(slice.lastIndexOf("\n"), slice.lastIndexOf(" "));
+    const index = breakpoint > maxLength * 0.6 ? breakpoint : maxLength;
+    chunks.push(remaining.slice(0, index).trimEnd());
+    remaining = remaining.slice(index).trimStart();
+  }
+
+  if (remaining) {
+    chunks.push(remaining);
+  }
+
+  return chunks.filter(Boolean);
+}
+
 function sessionBaseName(channel: { isThread?: () => boolean; parent?: { name?: string | null } | null; name?: string | null }): string | undefined {
   if (typeof channel.isThread === "function" && channel.isThread() && channel.parent?.name) {
     return channel.parent.name;
   }
 
   return channel.name ?? undefined;
+}
+
+function parentCategoryName(
+  channel: {
+    isThread?: () => boolean;
+    parent?: { name?: string | null; parent?: { name?: string | null } | null } | null;
+    name?: string | null;
+  }
+): string | undefined {
+  if (typeof channel.isThread === "function" && channel.isThread()) {
+    return normalizeName(channel.parent?.parent?.name);
+  }
+
+  return normalizeName(channel.parent?.name);
+}
+
+function waitForReady(client: Client): Promise<void> {
+  if (client.isReady()) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    client.once(Events.ClientReady, () => resolve());
+  });
 }
 
 export class DiscordPublisher {
@@ -114,6 +171,11 @@ export class DiscordPublisher {
 
     const sourceChannel = await this.orchestratorClient.channels.fetch(channelId);
     if (!sourceChannel || !("guild" in sourceChannel)) {
+      return;
+    }
+
+    const orchestraCategoryName = normalizeName(this.config.orchestraCategoryName);
+    if (!orchestraCategoryName || parentCategoryName(sourceChannel) !== orchestraCategoryName) {
       return;
     }
 
@@ -264,13 +326,19 @@ export class DiscordPublisher {
 
   async startReceiver(): Promise<void> {
     await this.orchestratorClient.login(this.config.discordBots.orchestrator);
+    await waitForReady(this.orchestratorClient);
   }
 
   async startSenders(): Promise<void> {
     await Promise.all(
       (["claude", "codex", "gemini"] as const)
         .filter((agent) => this.agentClients[agent] && this.config.discordBots[agent])
-        .map((agent) => this.agentClients[agent]!.login(this.config.discordBots[agent]!))
+        .map(async (agent) => {
+          const client = this.agentClients[agent]!;
+          await client.login(this.config.discordBots[agent]!);
+          await waitForReady(client);
+          await this.removeLegacySettingCommands(client);
+        })
     );
   }
 
@@ -286,7 +354,15 @@ export class DiscordPublisher {
       identity === "orchestrator"
         ? this.orchestratorClient
         : this.agentClients[identity] ?? this.orchestratorClient;
-    await sendToScope(client, channelId, threadId, content);
+    try {
+      await sendToScope(client, channelId, threadId, content);
+    } catch (error) {
+      if (client !== this.orchestratorClient) {
+        await sendToScope(this.orchestratorClient, channelId, threadId, content);
+        return;
+      }
+      throw error;
+    }
   }
 
   async publishFilesAs(
@@ -300,7 +376,15 @@ export class DiscordPublisher {
       identity === "orchestrator"
         ? this.orchestratorClient
         : this.agentClients[identity] ?? this.orchestratorClient;
-    await sendFilesToScope(client, channelId, threadId, content, filePaths);
+    try {
+      await sendFilesToScope(client, channelId, threadId, content, filePaths);
+    } catch (error) {
+      if (client !== this.orchestratorClient) {
+        await sendFilesToScope(this.orchestratorClient, channelId, threadId, content, filePaths);
+        return;
+      }
+      throw error;
+    }
   }
 
   async showTypingAs(identity: BotIdentity, channelId: string, threadId: string | undefined): Promise<void> {
@@ -309,6 +393,34 @@ export class DiscordPublisher {
         ? this.orchestratorClient
         : this.agentClients[identity] ?? this.orchestratorClient;
     await sendTypingToScope(client, channelId, threadId);
+  }
+
+  private async deleteMatchingCommands(commands: Iterable<ApplicationCommand>, names: string[]): Promise<void> {
+    for (const command of commands) {
+      if (names.includes(normalizeName(command.name))) {
+        await command.delete();
+      }
+    }
+  }
+
+  private async removeLegacySettingCommands(client: Client): Promise<void> {
+    const targetNames = ["setting", "settings"];
+
+    try {
+      const application = client.application;
+      if (application) {
+        const globalCommands = await application.commands.fetch();
+        await this.deleteMatchingCommands(globalCommands.values(), targetNames);
+      }
+
+      if (this.config.discordGuildId) {
+        const guild = await client.guilds.fetch(this.config.discordGuildId);
+        const guildCommands = await guild.commands.fetch();
+        await this.deleteMatchingCommands(guildCommands.values(), targetNames);
+      }
+    } catch (error) {
+      console.warn(`Failed to clean legacy commands for ${client.user?.tag ?? "unknown bot"}:`, error);
+    }
   }
 
   async publishTaskEvent(event: TaskEvent, mode: ChannelMode): Promise<void> {

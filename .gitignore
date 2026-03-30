@@ -3,5 +3,5 @@ dist/
 .env
 .DS_Store
 .omc/
-artifacts/
+/artifacts/
 data/

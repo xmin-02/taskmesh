@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 
-import type { AgentCliConfig, AgentKind } from "../config.js";
+import type { AgentCliConfig, AgentKind, DockerProviderConfig, ExecutionMode } from "../config.js";
 import type { AgentAdapter, AgentTooling } from "./adapter.js";
+import { spawnDockerAgent } from "./docker-runner.js";
+import type { SessionPaths } from "../sessions/workspace-manager.js";
 import type {
   AgentRunResult,
   AgentSession,
@@ -14,6 +16,33 @@ const DELEGATION_PREFIX = "TASKMESH_DELEGATE";
 const FILE_PREFIX = "TASKMESH_WRITE_FILE";
 const FILE_CONTENT_START = "<<<TASKMESH_CONTENT";
 const FILE_CONTENT_END = "TASKMESH_END_CONTENT";
+
+function withoutArgs(
+  args: string[],
+  disallowed: string[]
+): string[] {
+  const result: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const current = args[index];
+    if (!current) {
+      continue;
+    }
+
+    if (disallowed.includes(current)) {
+      index += 1;
+      continue;
+    }
+
+    result.push(current);
+  }
+
+  return result;
+}
+
+function stripTrailingPromptDash(args: string[]): string[] {
+  return args.at(-1) === "-" ? args.slice(0, -1) : args;
+}
 
 function buildPrompt(task: TaskRecord, session: AgentSession): string {
   return [
@@ -116,20 +145,92 @@ function stripProtocolLines(output: string): string {
   return kept.join("\n").trim();
 }
 
+function buildInvocation(
+  kind: AgentKind,
+  config: AgentCliConfig,
+  session: AgentSession
+): AgentCliConfig {
+  if (kind === "claude") {
+    const baseArgs = withoutArgs(config.args, ["--session-id", "--resume"]);
+    if (session.externalSessionId) {
+      return {
+        command: config.command,
+        args: [...baseArgs, "--resume", session.externalSessionId]
+      };
+    }
+
+    return {
+      command: config.command,
+      args: [...baseArgs, "--session-id", session.id]
+    };
+  }
+
+  if (kind === "codex") {
+    const baseArgs = stripTrailingPromptDash(config.args);
+    if (session.externalSessionId) {
+      const execArgs = withoutArgs(baseArgs.slice(1), ["--cd", "-C", "--add-dir", "--sandbox"]);
+      return {
+        command: config.command,
+        args: ["exec", "resume", "--last", ...execArgs, "-"]
+      };
+    }
+
+    return {
+      command: config.command,
+      args: config.args
+    };
+  }
+
+  if (kind === "gemini" && session.externalSessionId) {
+    return {
+      command: config.command,
+      args: ["--resume", session.externalSessionId, ...config.args]
+    };
+  }
+
+  return config;
+}
+
+function deriveExternalSessionId(kind: AgentKind, session: AgentSession): string | undefined {
+  if (kind === "claude") {
+    return session.externalSessionId ?? session.id;
+  }
+
+  if (kind === "codex" || kind === "gemini") {
+    return session.externalSessionId ?? "latest";
+  }
+
+  return undefined;
+}
+
 export class CliAgentAdapter implements AgentAdapter {
   constructor(
     public readonly kind: AgentKind,
-    private readonly config: AgentCliConfig
+    private readonly config: AgentCliConfig,
+    private readonly executionMode: ExecutionMode,
+    private readonly dockerBinary: string,
+    private readonly dockerProvider?: DockerProviderConfig
   ) {}
 
-  async run(task: TaskRecord, session: AgentSession, _tools: AgentTooling): Promise<AgentRunResult> {
+  async run(task: TaskRecord, session: AgentSession, sessionPaths: SessionPaths, _tools: AgentTooling): Promise<AgentRunResult> {
     const prompt = buildPrompt(task, session);
+    const invocation = buildInvocation(this.kind, this.config, session);
 
     return new Promise<AgentRunResult>((resolve, reject) => {
-      const child = spawn(this.config.command, this.config.args, {
-        env: process.env,
-        stdio: ["pipe", "pipe", "pipe"]
-      });
+      const child =
+        this.executionMode === "docker" && this.dockerProvider
+          ? spawnDockerAgent({
+              dockerBinary: this.dockerBinary,
+              provider: this.dockerProvider,
+              cli: invocation,
+              session: sessionPaths,
+              agent: this.kind
+            })
+          : spawn(invocation.command, invocation.args, {
+              cwd: sessionPaths.workspaceDir,
+              env: process.env,
+              stdio: ["pipe", "pipe", "pipe"]
+            });
 
       let stdout = "";
       let stderr = "";
@@ -154,10 +255,12 @@ export class CliAgentAdapter implements AgentAdapter {
 
         const trimmedOutput = stdout.trim();
         const cleanOutput = stripProtocolLines(trimmedOutput);
+        const externalSessionId = deriveExternalSessionId(this.kind, session);
 
         resolve({
           summary: cleanOutput || `[${this.kind}] completed task ${task.id}`,
           rawOutput: trimmedOutput,
+          ...(externalSessionId ? { externalSessionId } : {}),
           artifacts: [],
           fileWrites: parseFileWrites(trimmedOutput),
           delegations: parseDelegations(trimmedOutput)

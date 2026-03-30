@@ -29,6 +29,15 @@ export class InMemoryTaskStore implements TaskStore {
     return created;
   }
 
+  async updateSessionExternalId(sessionId: string, externalSessionId: string): Promise<void> {
+    const session = this.sessions.find((entry) => entry.id === sessionId);
+    if (!session) {
+      throw new Error(`Unknown session: ${sessionId}`);
+    }
+
+    session.externalSessionId = externalSessionId;
+  }
+
   async createTask(task: CreateTaskInput): Promise<TaskRecord> {
     const createdBase = {
       ...task,

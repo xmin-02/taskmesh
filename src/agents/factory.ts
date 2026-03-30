@@ -8,7 +8,18 @@ export function createAgentAdapters(config: AppConfig): Map<AgentKind, AgentAdap
 
   for (const agent of config.enabledAgents) {
     const cliConfig = config.agentCommands[agent];
-    adapters.set(agent, cliConfig ? new CliAgentAdapter(agent, cliConfig) : new StubAgentAdapter(agent));
+    adapters.set(
+      agent,
+      cliConfig
+        ? new CliAgentAdapter(
+            agent,
+            cliConfig,
+            config.executionMode,
+            config.dockerBinary,
+            config.dockerProviders[agent]
+          )
+        : new StubAgentAdapter(agent)
+    );
   }
 
   return adapters;
