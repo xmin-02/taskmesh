@@ -145,6 +145,29 @@ function stripProtocolLines(output: string): string {
   return kept.join("\n").trim();
 }
 
+const PATH_FLAGS = new Set(["--add-dir", "--cd", "-C"]);
+
+function rewritePathsForDocker(args: string[], hostProjectDir: string): string[] {
+  const result: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const current = args[i] ?? "";
+    result.push(current);
+
+    if (PATH_FLAGS.has(current) && i + 1 < args.length) {
+      const nextArg = args[i + 1] ?? "";
+      i += 1;
+      result.push(
+        nextArg === hostProjectDir || nextArg.startsWith(hostProjectDir + "/")
+          ? "/workspace" + nextArg.slice(hostProjectDir.length)
+          : nextArg
+      );
+    }
+  }
+
+  return result;
+}
+
 function buildInvocation(
   kind: AgentKind,
   config: AgentCliConfig,
@@ -209,12 +232,17 @@ export class CliAgentAdapter implements AgentAdapter {
     private readonly config: AgentCliConfig,
     private readonly executionMode: ExecutionMode,
     private readonly dockerBinary: string,
-    private readonly dockerProvider?: DockerProviderConfig
+    private readonly dockerProvider: DockerProviderConfig | undefined,
+    private readonly hostProjectDir: string
   ) {}
 
   async run(task: TaskRecord, session: AgentSession, sessionPaths: SessionPaths, _tools: AgentTooling): Promise<AgentRunResult> {
     const prompt = buildPrompt(task, session);
     const invocation = buildInvocation(this.kind, this.config, session);
+    const finalInvocation =
+      this.executionMode === "docker"
+        ? { ...invocation, args: rewritePathsForDocker(invocation.args, this.hostProjectDir) }
+        : invocation;
 
     return new Promise<AgentRunResult>((resolve, reject) => {
       const child =
@@ -222,11 +250,11 @@ export class CliAgentAdapter implements AgentAdapter {
           ? spawnDockerAgent({
               dockerBinary: this.dockerBinary,
               provider: this.dockerProvider,
-              cli: invocation,
+              cli: finalInvocation,
               session: sessionPaths,
               agent: this.kind
             })
-          : spawn(invocation.command, invocation.args, {
+          : spawn(finalInvocation.command, finalInvocation.args, {
               cwd: sessionPaths.workspaceDir,
               env: process.env,
               stdio: ["pipe", "pipe", "pipe"]

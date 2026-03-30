@@ -52,6 +52,7 @@ export interface AppConfig {
   cloudflareTunnelPublicUrl?: string;
   agentCommands: Partial<Record<AgentKind, AgentCliConfig>>;
   dockerProviders: Partial<Record<AgentKind, DockerProviderConfig>>;
+  hostProjectDir: string;
 }
 
 function readBoolean(name: string, defaultValue: boolean): boolean {
@@ -206,7 +207,8 @@ export function loadConfig(): AppConfig {
       ? { cloudflareTunnelPublicUrl: process.env.TASKMESH_CLOUDFLARE_TUNNEL_PUBLIC_URL.trim().replace(/\/+$/u, "") }
       : {}),
     agentCommands: {},
-    dockerProviders: {}
+    dockerProviders: {},
+    hostProjectDir: process.env.TASKMESH_HOST_PROJECT_DIR?.trim() || process.cwd()
   };
 
   const claudeCli = readCliConfig("CLAUDE");

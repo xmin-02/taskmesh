@@ -16,7 +16,8 @@ export function createAgentAdapters(config: AppConfig): Map<AgentKind, AgentAdap
             cliConfig,
             config.executionMode,
             config.dockerBinary,
-            config.dockerProviders[agent]
+            config.dockerProviders[agent],
+            config.hostProjectDir
           )
         : new StubAgentAdapter(agent)
     );
