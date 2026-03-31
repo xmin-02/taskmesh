@@ -4,6 +4,7 @@ import type { AgentRunResult, AgentSession, DelegationRequest, SharedMemoryEntry
 
 export interface AgentTooling {
   delegate(request: DelegationRequest): Promise<AgentRunResult>;
+  onProgress?(chunk: string): Promise<void> | void;
 }
 
 export interface AgentAdapter {

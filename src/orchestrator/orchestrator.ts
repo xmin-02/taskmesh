@@ -60,7 +60,17 @@ export class Orchestrator {
       const sharedMemory = await this.store.getSharedMemory(scope);
       const result = await adapter.run(task, session, sessionPaths, {
         delegate: async (request: DelegationRequest) =>
-          this.startTask(request.toAgent, request.prompt, request.scope, request.fromTaskId, depth + 1)
+          this.startTask(request.toAgent, request.prompt, request.scope, request.fromTaskId, depth + 1),
+        onProgress: async (chunk: string) => {
+          await this.emit({
+            type: "task_progress",
+            taskId: task.id,
+            ...(parentTaskId ? { parentTaskId } : {}),
+            agent,
+            scope,
+            message: chunk
+          });
+        }
       }, sharedMemory);
 
       if (result.externalSessionId && result.externalSessionId !== session.externalSessionId) {

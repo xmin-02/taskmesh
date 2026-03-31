@@ -73,6 +73,7 @@ export interface CreateTaskInput {
 
 export type TaskEventType =
   | "task_started"
+  | "task_progress"
   | "task_completed"
   | "task_failed"
   | "delegation_requested"

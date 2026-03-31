@@ -480,6 +480,9 @@ export class DiscordPublisher {
       if (event.type === "task_started") {
         await this.showTypingAs(event.agent, event.scope.channelId, event.scope.threadId);
       }
+      if (event.type === "task_progress") {
+        await this.publishAs(event.agent, event.scope.channelId, event.scope.threadId, event.message);
+      }
       if (event.type === "task_failed") {
         await this.publishAs("orchestrator", event.scope.channelId, event.scope.threadId, `작업이 실패했습니다.\n${event.message}`);
       }
@@ -498,6 +501,11 @@ export class DiscordPublisher {
     if (mode === "orchestra") {
       if (event.type === "task_started") {
         await this.showTypingAs(event.agent, event.scope.channelId, event.scope.threadId);
+        return;
+      }
+
+      if (event.type === "task_progress") {
+        await this.publishAs(event.agent, event.scope.channelId, event.scope.threadId, event.message);
         return;
       }
 

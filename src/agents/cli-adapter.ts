@@ -277,7 +277,7 @@ export class CliAgentAdapter implements AgentAdapter {
     private readonly hostProjectDir: string
   ) {}
 
-  async run(task: TaskRecord, session: AgentSession, sessionPaths: SessionPaths, _tools: AgentTooling, sharedMemory: SharedMemoryEntry[]): Promise<AgentRunResult> {
+  async run(task: TaskRecord, session: AgentSession, sessionPaths: SessionPaths, tools: AgentTooling, sharedMemory: SharedMemoryEntry[]): Promise<AgentRunResult> {
     const prompt = buildPrompt(task, session, sharedMemory);
     const invocation = buildInvocation(this.kind, this.config, session);
     const finalInvocation =
@@ -306,6 +306,17 @@ export class CliAgentAdapter implements AgentAdapter {
 
       let stdout = "";
       let stderr = "";
+      let lastProgressLength = 0;
+
+      const progressInterval = tools.onProgress
+        ? setInterval(() => {
+            const current = stripProtocolLines(stdout.trim());
+            if (current.length > lastProgressLength) {
+              lastProgressLength = current.length;
+              tools.onProgress?.(current);
+            }
+          }, 3000)
+        : undefined;
 
       child.stdout.on("data", (chunk: Buffer | string) => {
         stdout += chunk.toString();
@@ -316,10 +327,12 @@ export class CliAgentAdapter implements AgentAdapter {
       });
 
       child.on("error", (error) => {
+        if (progressInterval) clearInterval(progressInterval);
         reject(error);
       });
 
       child.on("close", (code) => {
+        if (progressInterval) clearInterval(progressInterval);
         if (code !== 0) {
           reject(new Error(`[${this.kind}] command failed with code ${code}: ${stderr.trim()}`));
           return;
