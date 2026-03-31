@@ -1,4 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -38,10 +39,9 @@ export function spawnDockerAgent(config: DockerRunConfig) {
 
   args.push("--memory=4g", "--cpus=2");
 
-  const shortId = config.session.sessionId.slice(0, 20);
-  const containerName = `taskmesh-${config.agent}-${shortId}`;
-  spawnSync(config.dockerBinary, ["rm", "-f", containerName], { stdio: "ignore" });
-  args.push("--name", containerName);
+  const shortId = config.session.sessionId.slice(0, 12);
+  const runId = randomUUID().slice(0, 8);
+  args.push("--name", `taskmesh-${config.agent}-${shortId}-${runId}`);
 
   for (const mount of config.provider.mounts) {
     const parts = mount.split(":");

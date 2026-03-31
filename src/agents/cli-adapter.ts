@@ -18,6 +18,74 @@ import type {
 const DELEGATION_PREFIX = "TASKMESH_DELEGATE";
 const FILE_PREFIX = "TASKMESH_WRITE_FILE";
 const MEMORY_PREFIX = "TASKMESH_MEMORY_SET";
+
+interface StreamJsonToolUse {
+  name: string;
+  input: Record<string, unknown>;
+}
+
+function formatToolUseProgress(tool: StreamJsonToolUse): string {
+  const name = tool.name;
+  const input = tool.input;
+
+  if (name === "Bash" && typeof input.command === "string") {
+    const cmd = input.command.length > 80 ? input.command.slice(0, 80) + "..." : input.command;
+    return `⏺ Bash(${cmd})`;
+  }
+  if (name === "Read" && typeof input.file_path === "string") {
+    return `⏺ Read(${input.file_path})`;
+  }
+  if (name === "Edit" && typeof input.file_path === "string") {
+    return `⏺ Edit(${input.file_path})`;
+  }
+  if (name === "Write" && typeof input.file_path === "string") {
+    return `⏺ Write(${input.file_path})`;
+  }
+  if (name === "Glob" && typeof input.pattern === "string") {
+    return `⏺ Glob(${input.pattern})`;
+  }
+  if (name === "Grep" && typeof input.pattern === "string") {
+    return `⏺ Grep(${input.pattern})`;
+  }
+
+  return `⏺ ${name}`;
+}
+
+function parseStreamJsonLine(line: string): { type: string; toolUse?: StreamJsonToolUse; text?: string; result?: string } | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    const obj = JSON.parse(trimmed) as Record<string, unknown>;
+    const type = obj.type as string;
+
+    if (type === "assistant") {
+      const message = obj.message as Record<string, unknown> | undefined;
+      const content = message?.content as Array<Record<string, unknown>> | undefined;
+      if (!content?.length) return { type };
+
+      for (const block of content) {
+        if (block.type === "tool_use" && typeof block.name === "string") {
+          return {
+            type: "tool_use",
+            toolUse: { name: block.name, input: (block.input as Record<string, unknown>) ?? {} }
+          };
+        }
+        if (block.type === "text" && typeof block.text === "string") {
+          return { type: "text", text: block.text };
+        }
+      }
+    }
+
+    if (type === "result") {
+      return { type: "result", result: (obj.result as string) ?? "" };
+    }
+
+    return { type };
+  } catch {
+    return undefined;
+  }
+}
 const FILE_CONTENT_START = "<<<TASKMESH_CONTENT";
 const FILE_CONTENT_END = "TASKMESH_END_CONTENT";
 
@@ -209,6 +277,30 @@ function rewritePathsForDocker(args: string[], hostProjectDir: string): string[]
   return result;
 }
 
+function replaceOutputFormat(args: string[]): string[] {
+  const result: string[] = [];
+  let hasVerbose = false;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const current = args[i] ?? "";
+    if (current === "--output-format" && i + 1 < args.length) {
+      result.push("--output-format", "stream-json");
+      i += 1;
+      continue;
+    }
+    if (current === "--verbose") {
+      hasVerbose = true;
+    }
+    result.push(current);
+  }
+
+  if (!hasVerbose) {
+    result.unshift("--verbose");
+  }
+
+  return result;
+}
+
 function buildInvocation(
   kind: AgentKind,
   config: AgentCliConfig,
@@ -219,13 +311,13 @@ function buildInvocation(
     if (session.externalSessionId) {
       return {
         command: config.command,
-        args: [...baseArgs, "--resume", session.externalSessionId]
+        args: replaceOutputFormat([...baseArgs, "--resume", session.externalSessionId])
       };
     }
 
     return {
       command: config.command,
-      args: [...baseArgs, "--session-id", session.id]
+      args: replaceOutputFormat([...baseArgs, "--session-id", session.id])
     };
   }
 
@@ -307,8 +399,11 @@ export class CliAgentAdapter implements AgentAdapter {
       let stdout = "";
       let stderr = "";
       let lastProgressLength = 0;
+      let streamJsonResult: string | undefined;
+      const isClaudeStream = this.kind === "claude";
+      let lineBuf = "";
 
-      const progressInterval = tools.onProgress
+      const progressInterval = !isClaudeStream && tools.onProgress
         ? setInterval(() => {
             const current = stripProtocolLines(stdout.trim());
             if (current.length > lastProgressLength) {
@@ -319,7 +414,25 @@ export class CliAgentAdapter implements AgentAdapter {
         : undefined;
 
       child.stdout.on("data", (chunk: Buffer | string) => {
-        stdout += chunk.toString();
+        const text = chunk.toString();
+        stdout += text;
+
+        if (isClaudeStream && tools.onProgress) {
+          lineBuf += text;
+          const lines = lineBuf.split("\n");
+          lineBuf = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const parsed = parseStreamJsonLine(line);
+            if (!parsed) continue;
+
+            if (parsed.type === "tool_use" && parsed.toolUse) {
+              tools.onProgress(formatToolUseProgress(parsed.toolUse));
+            } else if (parsed.type === "result" && parsed.result) {
+              streamJsonResult = parsed.result;
+            }
+          }
+        }
       });
 
       child.stderr.on("data", (chunk: Buffer | string) => {
@@ -339,7 +452,8 @@ export class CliAgentAdapter implements AgentAdapter {
         }
 
         const trimmedOutput = stdout.trim();
-        const cleanOutput = stripProtocolLines(trimmedOutput);
+        const effectiveOutput = isClaudeStream && streamJsonResult ? streamJsonResult : trimmedOutput;
+        const cleanOutput = stripProtocolLines(isClaudeStream ? effectiveOutput : trimmedOutput);
         const externalSessionId = deriveExternalSessionId(this.kind, session);
 
         resolve({
@@ -347,9 +461,9 @@ export class CliAgentAdapter implements AgentAdapter {
           rawOutput: trimmedOutput,
           ...(externalSessionId ? { externalSessionId } : {}),
           artifacts: [],
-          fileWrites: parseFileWrites(trimmedOutput),
-          delegations: parseDelegations(trimmedOutput),
-          memoryWrites: parseMemoryWrites(trimmedOutput)
+          fileWrites: parseFileWrites(effectiveOutput),
+          delegations: parseDelegations(effectiveOutput),
+          memoryWrites: parseMemoryWrites(effectiveOutput)
         });
       });
 
