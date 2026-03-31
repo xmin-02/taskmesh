@@ -144,6 +144,8 @@ function waitForReady(client: Client): Promise<void> {
 export class DiscordPublisher {
   private readonly orchestratorClient: Client;
   private readonly agentClients: Partial<Record<AgentKind, Client>>;
+  private readonly logChannelsProvisioned = new Set<string>();
+  private readonly mirrorChannelCache = new Map<string, string | undefined>();
 
   constructor(private readonly config: AppConfig) {
     this.orchestratorClient = createReceiverClient();
@@ -165,7 +167,7 @@ export class DiscordPublisher {
   }
 
   private async ensureSessionLogChannels(channelId: string): Promise<void> {
-    if (!this.config.autoCreateSessionLogs) {
+    if (!this.config.autoCreateSessionLogs || this.logChannelsProvisioned.has(channelId)) {
       return;
     }
 
@@ -226,6 +228,8 @@ export class DiscordPublisher {
         });
       }
     }
+
+    this.logChannelsProvisioned.add(channelId);
   }
 
   async provisionSessionLogs(channelId: string): Promise<void> {
@@ -233,6 +237,11 @@ export class DiscordPublisher {
   }
 
   private async resolveMirrorChannelId(channelId: string, suffix: string): Promise<string | undefined> {
+    const cacheKey = `${channelId}:${suffix}`;
+    if (this.mirrorChannelCache.has(cacheKey)) {
+      return this.mirrorChannelCache.get(cacheKey);
+    }
+
     await this.ensureSessionLogChannels(channelId);
     const sourceChannel = await this.orchestratorClient.channels.fetch(channelId);
     if (!sourceChannel || !("guild" in sourceChannel) || !("name" in sourceChannel)) {
@@ -265,11 +274,13 @@ export class DiscordPublisher {
       });
 
       if (dedicatedMatch) {
+        this.mirrorChannelCache.set(cacheKey, dedicatedMatch.id);
         return dedicatedMatch.id;
       }
     }
 
     if (!this.config.logCategoryName) {
+      this.mirrorChannelCache.set(cacheKey, undefined);
       return undefined;
     }
 
@@ -285,7 +296,9 @@ export class DiscordPublisher {
       return parentName === logCategoryName;
     });
 
-    return matched?.id;
+    const result = matched?.id;
+    this.mirrorChannelCache.set(cacheKey, result);
+    return result;
   }
 
   async publishLog(channelId: string, content: string): Promise<void> {
