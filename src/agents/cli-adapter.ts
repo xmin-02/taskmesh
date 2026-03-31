@@ -10,11 +10,14 @@ import type {
   AgentSession,
   DelegationInstruction,
   FileArtifactInstruction,
+  MemoryWriteInstruction,
+  SharedMemoryEntry,
   TaskRecord
 } from "../types.js";
 
 const DELEGATION_PREFIX = "TASKMESH_DELEGATE";
 const FILE_PREFIX = "TASKMESH_WRITE_FILE";
+const MEMORY_PREFIX = "TASKMESH_MEMORY_SET";
 const FILE_CONTENT_START = "<<<TASKMESH_CONTENT";
 const FILE_CONTENT_END = "TASKMESH_END_CONTENT";
 
@@ -45,14 +48,24 @@ function stripTrailingPromptDash(args: string[]): string[] {
   return args.at(-1) === "-" ? args.slice(0, -1) : args;
 }
 
-function buildPrompt(task: TaskRecord, session: AgentSession): string {
+function buildPrompt(task: TaskRecord, session: AgentSession, sharedMemory: SharedMemoryEntry[]): string {
+  const memorySection = sharedMemory.length
+    ? [
+        "[Shared Memory]",
+        ...sharedMemory.map((entry) => `${entry.key}: ${entry.value}`),
+        ""
+      ]
+    : [];
+
   return [
+    ...memorySection,
     `Agent: ${task.agent}`,
     `Task ID: ${task.id}`,
     `Channel ID: ${session.scope.channelId}`,
     session.scope.threadId ? `Thread ID: ${session.scope.threadId}` : undefined,
     "Delegation Protocol: emit lines formatted as `TASKMESH_DELEGATE <agent> :: <prompt>` when you want Taskmesh to create a child task.",
     "File Protocol: emit `TASKMESH_WRITE_FILE <relative-path>` followed by `<<<TASKMESH_CONTENT`, file body, and `TASKMESH_END_CONTENT` when you want Taskmesh to save and upload a file.",
+    "Memory Protocol: emit `TASKMESH_MEMORY_SET <key> :: <value>` to store information that other agents in this channel can access. Use this to share important context like user names, project goals, or task summaries.",
     "",
     task.prompt
   ]
@@ -121,6 +134,29 @@ function parseFileWrites(output: string): FileArtifactInstruction[] {
   return instructions;
 }
 
+function parseMemoryWrites(output: string): MemoryWriteInstruction[] {
+  const instructions: MemoryWriteInstruction[] = [];
+
+  for (const line of output.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith(MEMORY_PREFIX)) {
+      continue;
+    }
+
+    const match = trimmed.match(/^TASKMESH_MEMORY_SET\s+(\S+)\s+::\s+([\s\S]+)$/);
+    if (!match?.[1] || !match[2]) {
+      continue;
+    }
+
+    instructions.push({
+      key: match[1].trim(),
+      value: match[2].trim()
+    });
+  }
+
+  return instructions;
+}
+
 function stripProtocolLines(output: string): string {
   const lines = output.split("\n");
   const kept: string[] = [];
@@ -129,6 +165,10 @@ function stripProtocolLines(output: string): string {
     const trimmed = lines[index]?.trim() ?? "";
 
     if (trimmed.startsWith(DELEGATION_PREFIX)) {
+      continue;
+    }
+
+    if (trimmed.startsWith(MEMORY_PREFIX)) {
       continue;
     }
 
@@ -237,8 +277,8 @@ export class CliAgentAdapter implements AgentAdapter {
     private readonly hostProjectDir: string
   ) {}
 
-  async run(task: TaskRecord, session: AgentSession, sessionPaths: SessionPaths, _tools: AgentTooling): Promise<AgentRunResult> {
-    const prompt = buildPrompt(task, session);
+  async run(task: TaskRecord, session: AgentSession, sessionPaths: SessionPaths, _tools: AgentTooling, sharedMemory: SharedMemoryEntry[]): Promise<AgentRunResult> {
+    const prompt = buildPrompt(task, session, sharedMemory);
     const invocation = buildInvocation(this.kind, this.config, session);
     const finalInvocation =
       this.executionMode === "docker"
@@ -295,7 +335,8 @@ export class CliAgentAdapter implements AgentAdapter {
           ...(externalSessionId ? { externalSessionId } : {}),
           artifacts: [],
           fileWrites: parseFileWrites(trimmedOutput),
-          delegations: parseDelegations(trimmedOutput)
+          delegations: parseDelegations(trimmedOutput),
+          memoryWrites: parseMemoryWrites(trimmedOutput)
         });
       });
 

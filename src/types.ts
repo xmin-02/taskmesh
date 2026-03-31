@@ -43,6 +43,17 @@ export interface ResolvedArtifact {
   relativePath: string;
 }
 
+export interface SharedMemoryEntry {
+  key: string;
+  value: string;
+  agent: AgentKind;
+}
+
+export interface MemoryWriteInstruction {
+  key: string;
+  value: string;
+}
+
 export interface AgentRunResult {
   summary: string;
   rawOutput?: string;
@@ -50,6 +61,7 @@ export interface AgentRunResult {
   artifacts?: ResolvedArtifact[];
   fileWrites?: FileArtifactInstruction[];
   delegations?: DelegationInstruction[];
+  memoryWrites?: MemoryWriteInstruction[];
 }
 
 export interface CreateTaskInput {

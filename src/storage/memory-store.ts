@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgentKind } from "../config.js";
-import type { AgentSession, ChannelScope, CreateTaskInput, TaskRecord } from "../types.js";
+import type { AgentSession, ChannelScope, CreateTaskInput, SharedMemoryEntry, TaskRecord } from "../types.js";
 import type { TaskStore } from "./store.js";
 
 function sameScope(left: ChannelScope, right: ChannelScope): boolean {
@@ -12,6 +12,11 @@ export class InMemoryTaskStore implements TaskStore {
   private readonly sessions: AgentSession[] = [];
   private readonly tasks = new Map<string, TaskRecord>();
   private readonly events = new Map<string, string[]>();
+  private readonly memory = new Map<string, Map<string, { value: string; agent: AgentKind }>>();
+
+  private memoryKey(scope: ChannelScope): string {
+    return `${scope.channelId}:${scope.threadId ?? ""}`;
+  }
 
   async getOrCreateSession(agent: AgentKind, scope: ChannelScope): Promise<AgentSession> {
     const existing = this.sessions.find((session) => session.agent === agent && sameScope(session.scope, scope));
@@ -80,5 +85,21 @@ export class InMemoryTaskStore implements TaskStore {
 
   async listEvents(taskId: string): Promise<string[]> {
     return this.events.get(taskId) ?? [];
+  }
+
+  async getSharedMemory(scope: ChannelScope): Promise<SharedMemoryEntry[]> {
+    const entries = this.memory.get(this.memoryKey(scope));
+    if (!entries) return [];
+    return [...entries.entries()].map(([key, { value, agent }]) => ({ key, value, agent }));
+  }
+
+  async setSharedMemory(scope: ChannelScope, agent: AgentKind, key: string, value: string): Promise<void> {
+    const scopeKey = this.memoryKey(scope);
+    let entries = this.memory.get(scopeKey);
+    if (!entries) {
+      entries = new Map();
+      this.memory.set(scopeKey, entries);
+    }
+    entries.set(key, { value, agent });
   }
 }

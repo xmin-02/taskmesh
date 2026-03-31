@@ -57,10 +57,11 @@ export class Orchestrator {
     });
 
     try {
+      const sharedMemory = await this.store.getSharedMemory(scope);
       const result = await adapter.run(task, session, sessionPaths, {
         delegate: async (request: DelegationRequest) =>
           this.startTask(request.toAgent, request.prompt, request.scope, request.fromTaskId, depth + 1)
-      });
+      }, sharedMemory);
 
       if (result.externalSessionId && result.externalSessionId !== session.externalSessionId) {
         await this.store.updateSessionExternalId(session.id, result.externalSessionId);
@@ -70,6 +71,12 @@ export class Orchestrator {
         result.fileWrites?.length
           ? this.artifactManager.writeArtifacts(agent, scope, task.id, result.fileWrites)
           : [];
+
+      if (result.memoryWrites?.length) {
+        for (const entry of result.memoryWrites) {
+          await this.store.setSharedMemory(scope, agent, entry.key, entry.value);
+        }
+      }
 
       if (writtenArtifacts.length) {
         await this.emit({

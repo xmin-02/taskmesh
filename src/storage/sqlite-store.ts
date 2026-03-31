@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import type { AgentKind } from "../config.js";
-import type { AgentSession, ChannelScope, CreateTaskInput, TaskRecord } from "../types.js";
+import type { AgentSession, ChannelScope, CreateTaskInput, SharedMemoryEntry, TaskRecord } from "../types.js";
 import type { TaskStore } from "./store.js";
 
 function scopeKey(scope: ChannelScope): { channelId: string; threadId: string | null } {
@@ -48,6 +48,17 @@ export class SqliteTaskStore implements TaskStore {
         task_id TEXT NOT NULL,
         message TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS shared_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT NOT NULL,
+        thread_id TEXT,
+        agent TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(channel_id, thread_id, key)
       );
     `);
   }
@@ -135,5 +146,29 @@ export class SqliteTaskStore implements TaskStore {
       .all(taskId) as Array<{ message: string }>;
 
     return rows.map((row) => row.message);
+  }
+
+  async getSharedMemory(scope: ChannelScope): Promise<SharedMemoryEntry[]> {
+    const scoped = scopeKey(scope);
+    const rows = this.database
+      .prepare(
+        `SELECT key, value, agent FROM shared_memory
+         WHERE channel_id = ? AND thread_id IS ?
+         ORDER BY id ASC`
+      )
+      .all(scoped.channelId, scoped.threadId) as Array<{ key: string; value: string; agent: string }>;
+    return rows.map((row) => ({ key: row.key, value: row.value, agent: row.agent as AgentKind }));
+  }
+
+  async setSharedMemory(scope: ChannelScope, agent: AgentKind, key: string, value: string): Promise<void> {
+    const scoped = scopeKey(scope);
+    this.database
+      .prepare(
+        `INSERT INTO shared_memory (channel_id, thread_id, agent, key, value)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(channel_id, thread_id, key)
+         DO UPDATE SET value = excluded.value, agent = excluded.agent`
+      )
+      .run(scoped.channelId, scoped.threadId, agent, key, value);
   }
 }
