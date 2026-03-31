@@ -39,6 +39,14 @@ async function main(): Promise<void> {
   });
 }
 
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught exception:", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+});
+
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
