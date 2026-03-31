@@ -498,7 +498,6 @@ export class DiscordPublisher {
     if (mode === "orchestra") {
       if (event.type === "task_started") {
         await this.showTypingAs(event.agent, event.scope.channelId, event.scope.threadId);
-        await this.publishAs(event.agent, event.scope.channelId, event.scope.threadId, `작업을 시작합니다.`);
         return;
       }
 

@@ -214,12 +214,6 @@ export function attachDiscordHandlers(
           scope.channelId,
           `[orchestrator] request accepted\nmode=${policy.mode}\ntarget=${targetAgent}\nroute=${explicitPrefix}\n\n${message.content}`
         );
-        await publisher.publishAs(
-          "orchestrator",
-          scope.channelId,
-          scope.threadId,
-          `세션을 접수했습니다.\nMode: ${policy.mode}\nTarget: ${targetAgent}\n${explicitPrefix}`
-        );
       }
 
       const result = await orchestrator.startTask(targetAgent, taskPrompt, scope);
@@ -230,18 +224,18 @@ export function attachDiscordHandlers(
       }
 
       await publisher.publishAs(
-        "orchestrator",
+        targetAgent,
         scope.channelId,
         scope.threadId,
-        `최종 결과\n${formatDirectResult(result.summary)}`
+        formatDirectResult(result.summary)
       );
       await publisher.publishLog(
         scope.channelId,
-        `[orchestrator] final result`
+        `[${targetAgent}] final result`
       );
       await publisher.publishRawLog(
         scope.channelId,
-        `[orchestrator] final result\n${formatDirectResult(result.summary)}`
+        `[${targetAgent}] final result\n${formatDirectResult(result.summary)}`
       );
     } catch (error) {
       await publisher.publishAs(
